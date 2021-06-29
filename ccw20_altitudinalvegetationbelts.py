@@ -1,23 +1,53 @@
+#model of altitudinal forest vegtetation belts in Switzerland
+#author: Andreas Paul Zischg
+#literature describing the implemented model
+#Huber, B., Gubelmann, P., Zischg, A., Augustin, S., and Frehner, M.: Modellierung der Vegetationshöhenstufen und der Areale von Buche und Tanne für die Schweiz, Schweizerische Zeitschrift für Forstwesen, 170, 326–337, doi:10.3188/szf.2019.0326, 2019.
+#Huber, B., Zischg, A., Burnand, J., Frehner, M., and Carraro, G.: Mit welchen Klimaparametern kann man Grenzen plausibel erklären, die in NaiS (Nachhaltigkeit und Erfolgskontrolle im Schutzwald) verwendet werden um Ökogramme auszuwählen?: Schlussbericht des Projektes im Forschungsprogramm "Wald und Klimawandel" des Bundesamtes für Umwelt BAFU, Bern und der Eidg. Forschungsanstalt WSL, Birmensdorf, 2015.
+#Gubelmann, P., Huber, B., Frehner, M., Zischg, A., Burnand, J., and Carraro, G.: Quantifizierung und Verschie-bung der Höhenstufengrenzen sowie des Tannen- und Buchenareals in der Schweiz mit zwei Klimazukünften: Schlussbericht des Projektes «Adaptierte Ökogramme» im Forschungsprogramm «Wald und Klimawandel», ETH Zurich, Zurich, 2019.
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
 import seaborn as sns; sns.set()
+import sys
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.pipeline import FeatureUnion
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.pipeline import make_pipeline
 from sklearn import svm
 from sklearn.impute import SimpleImputer
-imp=SimpleImputer(missing_values=np.nan, strategy='most_frequent')
+#imp=SimpleImputer(missing_values=np.nan, strategy='most_frequent')
 #from pandas.tools.plotting import scatter_matrix
 
-#read data
+# Defines how many percent of the data is used to train and test the models. Here we use 20% of the data for testing
+test_ratio=0.2
+
+#read sample data
 myworkspace="D:/CCW20/GIS/samples"
 samples_n_df=pd.read_csv(myworkspace+"/"+"samples_n.csv", delimiter=";")
-samples_n_negative_df=pd.read_csv(myworkspace+"/"+"samples_n_negative.csv", delimiter=";")
-test_ratio=0.2
-t_attributeslist=["TYYMIN8110","TYYMEAN8110","TYYMAX8110","TOCTMIN8110","TOCTMEAN8110","TOCTMAX8110","TJULMIN8110","TJULMEAN8110","TJULMAX8110","TJANMIN8110","TJANMEAN8110","TJANMAX8110","TAPRMIN8110","TAPRMEAN8110","TAPRMAX8110","TABSMIN","TABSMAX"]
+#samples_n_negative_df=pd.read_csv(myworkspace+"/"+"samples_n_negative.csv", delimiter=";")
+
+#attributes
+#t = temperature
+t_attributeslist8110=["TYYMIN8110","TYYMEAN8110","TYYMAX8110","TOCTMIN8110","TOCTMEAN8110","TOCTMAX8110","TJULMIN8110","TJULMEAN8110","TJULMAX8110","TJANMIN8110","TJANMEAN8110","TJANMAX8110","TAPRMIN8110","TAPRMEAN8110","TAPRMAX8110","TABSMIN","TABSMAX"]
+t_attributeslist6190=["TYYMIN6190","TYYMEAN6190","TYYMAX6190","TOCTMIN6190","TOCTMEAN6190","TOCTMAX6190","TJULMIN6190","TJULMEAN6190","TJULMAX6190","TJANMIN6190","TJANMEAN6190","TJANMAX6190","TAPRMIN6190","TAPRMEAN6190","TAPRMAX6190","TABSMIN","TABSMAX"]
+#kont = thermal continentality
 kont_attributeslist=["KONTYY1800","KONTYY1400","KONTYY1000","KONTYY","KONTOCT2000","KONTOCT1800","KONTOCT1400","KONTOCT1000","KONTOCT","KONTJUL2000","KONTJUL1800","KONTJUL1400","KONTJUL1000","KONTJUL","KONTJAN2000","KONTJAN1800","KONTJAN1400","KONTJAN1000","KONTJAN","KONTJAHR2000","KONTAPR2000","KONTAPR1800","KONTAPR1400","KONTAPR1000","KONTAPR","KONTABS2000","KONTABS1000","KONTABS"]
+#foehn = foehn wind
 foehnh_attributeslist=["FOEHNHYY","FOEHNHOCT","FOEHNHJUL","FOEHNHJAN","FOEHNHAPR"]
+#ns = precipitation = rnorm
 ns_attributeslist=["NSYY","NSSEP","NSOCT","NSNOV","NSMAY","NSMAR","NSJUN","NSJUL","NSJAN","NSFEB","NSDEC","NSAUG","NSAPR","NS_JJA","NS_AMJJAS","NS_AMJJA"]
+#rad = global radiation
 rad_attributeslist=["GLOBRADYYW","GLOBRADJULW","GLOBRADJANW","GLOBRADAPRW", "GLOBRADOCTW"]
+#lf = relative air moisture
 lf_attributeslist=["MLFYY","MLFOCT","MLFJUL","MLFJAN","MLFAPR","LFOCT","LFJUL","LFJAN","LFAPR","LFYY"]
 
 #*************************************************************
@@ -29,7 +59,91 @@ def split_train_test(data, test_ratio):
     test_indices=shuffled_indices[:test_set_size]
     train_indices=shuffled_indices[test_set_size:]
     return data.iloc[train_indices], data.iloc[test_indices]
+def gridasciitonumpyarrayfloat(ingridfilefullpath):
+    i=0
+    row = 0
+    headerstr=''
+    infile=open(ingridfilefullpath, "r")
+    for line in infile:
+        if i==0:
+            ncols=int(line.strip().split()[-1])
+            headerstr+=line
+        elif i==1:
+            nrows=int(line.strip().split()[-1])
+            headerstr += line
+        elif i==2:
+            xllcorner=float(line.strip().split()[-1])
+            headerstr += line
+        elif i==3:
+            yllcorner=float(line.strip().split()[-1])
+            headerstr += line
+        elif i==4:
+            cellsize=float(line.strip().split()[-1])
+            headerstr += line
+        elif i==5:
+            NODATA_value=float(line.strip().split()[-1])
+            arr=numpy.zeros((nrows, ncols), dtype=float)
+            arr[:,:]=NODATA_value
+            headerstr += line.replace("\n","")
+        elif i>5:
+            col=0
+            while col<ncols:
+                for item in line.strip().split():
+                    arr[row,col]=float(item)
+                    col+=1
+            row+=1
+        i+=1
+    infile.close()
+    return arr, ncols, nrows, xllcorner, yllcorner, cellsize, NODATA_value, headerstr
+def gridasciitonumpyarrayint(ingridfilefullpath):
+    i=0
+    row = 0
+    headerstr=''
+    infile=open(ingridfilefullpath, "r")
+    for line in infile:
+        if i==0:
+            ncols=int(line.strip().split()[-1])
+            headerstr+=line
+        elif i==1:
+            nrows=int(line.strip().split()[-1])
+            headerstr += line
+        elif i==2:
+            xllcorner=float(line.strip().split()[-1])
+            headerstr += line
+        elif i==3:
+            yllcorner=float(line.strip().split()[-1])
+            headerstr += line
+        elif i==4:
+            cellsize=float(line.strip().split()[-1])
+            headerstr += line
+        elif i==5:
+            NODATA_value=float(line.strip().split()[-1])
+            arr=numpy.zeros((nrows, ncols), dtype=int)
+            arr[:,:]=NODATA_value
+            headerstr += line.replace("\n","")
+        elif i>5:
+            col=0
+            while col<ncols:
+                for item in line.strip().split():
+                    arr[row,col]=float(item)
+                    col+=1
+            row+=1
+        i+=1
+    infile.close()
+    return arr, ncols, nrows, xllcorner, yllcorner, cellsize, NODATA_value, headerstr
+
 # *************************************************************
+#end functions
+# *************************************************************
+
+
+
+
+#original linear models
+
+
+
+
 
 
 
@@ -147,37 +261,3 @@ hitrate
 #**************************************************************************************************************
 #beech area model
 #**************************************************************************************************************
-
-
-
-#plot histograms
-#trainset_n_4.hist(bins=50, figsize=(20,15))
-#trainset_n_4.plot(kind="scatter", x="XCoord", y="YCoord", alpha=0.1)
-#Pearson's standard correlation coefficient
-#corr_matrix=trainset_n_4.corr()
-#corr_matrix["DHM25"].sort_values(ascending=False)
-#for tmap in t_attributeslist:
-#    atts=[]
-#    atts.append(tmap)
-#    for item in kont_attributeslist:
-#        atts.append(item)
-#    pd.plotting.scatter_matrix(trainset_n_4[atts])
-#    atts = []
-#    atts.append(tmap)
-#    for item in ns_attributeslist:
-#        atts.append(item)
-#    pd.plotting.scatter_matrix(trainset_n_4[atts])
-#    atts = []
-#    atts.append(tmap)
-#    for item in rad_attributeslist:
-#        atts.append(item)
-#    pd.plotting.scatter_matrix(trainset_n_4[atts])
-#    atts = []
-#    atts.append(tmap)
-#    for item in foehnh_attributeslist:
-#        atts.append(item)
-#    pd.plotting.scatter_matrix(trainset_n_4[atts])
-
-#test fuzzy logic
-#import skfuzzy as fuzz
-#from skfuzzy import control as ctrl
